@@ -4,9 +4,6 @@ import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-# Load environment variables from .env file
-load_dotenv()
-
 class GitHubStreakTracker:
     """Manages the connection and logic for tracking GitHub contribution streaks."""
 
@@ -17,6 +14,7 @@ class GitHubStreakTracker:
         if not self.GITHUB_TOKEN:
             print("Error: GH_TOKEN not found in environment variables.")
         else:
+            # Use a dedicated Accept header for clear API interaction
             self.headers = {
                 "Authorization": f"token {self.GITHUB_TOKEN}",
                 "Accept": "application/vnd.github.v3+json"
@@ -25,70 +23,125 @@ class GitHubStreakTracker:
 
     def fetch_contribution_data(self):
         """
-        Placeholder: Fetches the necessary contribution data from GitHub API.
-        This will need to be updated based on whether we track contributions 
-        across all repos or focus on one profile's activity feed.
-        
-        For simplicity in V1, let's use the main contribution endpoint
-        if available, otherwise we iterate through recent commits of a default repo.
+        Fetches all unique contribution dates for the target user across their public repositories
+        by querying paginated commit data and aggregating event types (PushEvent, etc.).
+
+        Returns:
+            list[str]: A list of unique date strings ('YYYY-MM-DD') from activity. Returns empty list on failure.
         """
-        print("Fetching raw commit data... (Placeholder)")
-        # Actual implementation will go here
-        # We need to gather all relevant dates across all repos/commits for the user.
-        pass 
+        if not self.GITHUB_TOKEN or self.target_username == "your_github_user":
+            print("\n[!] Cannot fetch contribution data. GH_TOKEN is missing or target username is default.")
+            return []
+
+        all_dates = set()
+        # Querying general activity events (PushEvent covers most commit activities)
+        url = f"https://api.github.com/users/{self.target_username}/events?type=PushEvent&per_page=100"
+        headers = self.headers
+
+        print(f"Starting paginated fetch of activity data from GitHub API for {self.target_username}...")
+
+        while url:
+            try:
+                response = requests.get(url, headers=headers)
+
+                # Check for rate limiting/errors first
+                if response.status_code != 200:
+                    print(f"\n[!] API Request Failed. Status Code: {response.status_code}")
+                    if response.status_code == 403 and 'rate limit exceeded' in str(response.text):
+                        print("Rate limit exceeded! Please wait or use a GitHub App token with higher limits.")
+                    elif response.status_code == 401:
+                         print("Authentication Failed (401). Check if GH_TOKEN is correct and has required permissions.")
+                    return [] # Stop execution on API failure
+
+                data = response.json()
+                events = data.get('events', [])
+
+                if not events:
+                    break
+
+                # Process fetched events/commits
+                for event in events:
+                    created_at = event.get('created_at')
+                    if created_at:
+                        try:
+                            # Standardize date format by stripping Z and appending UTC offset (+00:00)
+                            date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                            formatted_date = date_obj.strftime('%Y-%m-%d')
+                            all_dates.add(formatted_date)
+                        except ValueError as e:
+                            print(f"Warning: Could not parse date '{created_at}'. Error: {e}")
+
+                # Handle pagination: Check for the 'next' link in headers
+                link_header = response.headers.get('link')
+                if link_header and 'rel="next"' in link_header:
+                    try:
+                        import re
+                        # Extracting URL from <url>; rel="next" structure
+                        next_match = re.findall(r'<([^>]+)>;\s*rel\s*=\s*["']next["']', link_header)
+                        url = next_match[0]
+                    except Exception:
+                         print("Warning: Could not parse 'next' URL from Link header.")
+                         url = None
+                else:
+                    # No next page found
+                    url = None
+
+            except requests.exceptions.RequestException as e:
+                print(f"\n[!] Network or Request Error during fetch: {e}")
+                return []
+
+        all_dates_list = list(all_dates)
+        print(f"✅ Successfully fetched data covering {len(all_dates_list)} unique days.")
+        return all_dates_list
 
     def calculate_streak(self, contribution_dates):
         """
-        Calculates the longest consecutive streak from a set of dates.
-        'contribution_dates' is expected to be a list or set of datetime objects.
+        Calculates the longest consecutive streak from a set of date strings.
+        'contribution_dates' is expected to be a list of 'YYYY-MM-DD' strings.
         """
         if not contribution_dates:
             print("No contribution data found.")
             return 0, None
 
-        # Convert to sorted unique dates (start with the most recent)
-        sorted_dates = sorted(list(set(contribution_dates)), reverse=True)
-        
-        current_streak = 1
-        last_date = sorted_dates[0]
-        current_window_end = last_date
-        
-        print("Calculating streak...")
+        # Use date objects for robust comparison
+        date_set = set(contribution_dates)
+        sorted_dates_str = sorted(list(date_set), reverse=True)
 
-        for i in range(1, len(sorted_dates)):
-            day = sorted_dates[i]
-            # Check if the gap is exactly one day (24 hours)
-            if (last_date - day).days == 1:
-                current_streak += 1
-            else:
-                # Streak broken. Check if this new start date begins a better streak?
-                # For simplicity, we only track the current run extending backward from today/max date.
-                pass # Reset if necessary, but since it's sorted reverse, we are looking for continuity.
-            
-            last_date = day
-        
-        # Reworking simple loop to find max streak:
+        # Convert all strings to datetime.date object immediately for efficiency
+        try:
+            date_objects = [datetime.strptime(d, '%Y-%m-%d').date() for d in sorted_dates_str]
+        except ValueError as e:
+            print(f"Error converting dates for streak calculation: {e}")
+            return 0, None
+
+        # --- Streak Calculation Logic (Optimized) ---
         max_streak = 0
         current_attempt_streak = 0
-        
-        if not sorted_dates: return 0, None
+        last_date = None # The date object before the current iteration's starting date
 
-        for i in range(len(sorted_dates)):
-            day = datetime.strptime(sorted_dates[i], '%Y-%m-%d').date()
+        for i in range(len(date_objects)):
+            current_date = date_objects[i]
+
             if i == 0:
+                # First day always starts a streak of at least 1
                 current_attempt_streak = 1
+                last_date = current_date
             else:
-                previous_day = datetime.strptime(sorted_dates[i-1], '%Y-%m-%d').date()
-                # If the day is exactly one day before the previous recorded day
-                if (previous_day - day).days == 1:
+                previous_date = date_objects[i-1]
+
+                # If the gap is exactly one day, increment streak
+                if (last_date - previous_date).days == 1:
                     current_attempt_streak += 1
                 else:
-                    current_attempt_streak = 1 # Start new potential streak
+                    # Streak broken. Start a new potential streak of 1.
+                    current_attempt_streak = 1
+
+                last_date = previous_date # The previously checked day becomes the reference for the next comparison
 
             max_streak = max(max_streak, current_attempt_streak)
-        
-        # Use the last date recorded as 'peak' for display purposes if successful.
-        return max_streak, sorted_dates[0]
+
+        peak_date = datetime.strptime(sorted_dates_str[0], '%Y-%m-%d').date() if sorted_dates_str else None
+        return max_streak, peak_date
 
 
 def main():
@@ -96,43 +149,32 @@ def main():
     print("--- GitHub Streak Tracker Initializing ---")
 
     # Get username from argument or environment variable
-    username = os.environ.get("GH_USER", "your_github_user") 
+    username = os.environ.get("GH_USER", "your_github_user")
     tracker = GitHubStreakTracker(github_username=username)
 
     if not tracker.GITHUB_TOKEN:
         print("\n[!] Cannot run streak calculation. Please ensure GH_TOKEN is set in the .env file.")
         return
 
-    # Step 1: Fetch Data
-    # This placeholder will be implemented later, but we pass an empty list for now 
-    # to simulate a successful data structure flow.
-    contribution_dates = [] # List of 'YYYY-MM-DD' strings or date objects
+    # Step 1: Fetch Data using live API calls
+    contribution_dates = tracker.fetch_contribution_data() # Returns list of 'YYYY-MM-DD' strings
 
-    # For testing the streak calculation logic without making API calls initially:
-    print("\n--- Running with Mock Data (Test) ---\n")
-    mock_data = [
-        "2023-12-31", # Start of a long chain
-        "2024-01-01",
-        "2024-01-02",
-        # Break here (missing 2024-01-03)
-        "2024-01-05", # New streak starts
-        "2024-01-06",
-    ]
-    contribution_dates = mock_data
+    if not contribution_dates:
+        print("Streak calculation skipped due to lack of contribution data or API failure.")
+        return # Exit if no dates were fetched
 
-    # Step 2: Calculate Streak
+    # Step 2: Calculate Streak using the live data
     streak, peak_date = tracker.calculate_streak(contribution_dates)
 
     if streak > 0 and peak_date:
         print("\n=====================================================")
         print("🏆 STREAK REPORT 💎")
         print("=====================================================")
-        print(f"🔥 Current Consecutive Streak (Mock): {streak} days!")
+        print(f"🔥 Current Consecutive Streak: {streak} days!")
         print(f"📅 Last recorded activity streak up to: {peak_date}")
         print("\nKeep coding! Don't lose your momentum.")
     else:
         print("Could not determine a solid streak. Check configurations or data availability.")
-
 
 if __name__ == "__main__":
     main()
