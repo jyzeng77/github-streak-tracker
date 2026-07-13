@@ -1,10 +1,12 @@
 # streaks/api_fetcher.py
 
+import re
 import requests
 from datetime import datetime, timedelta
 
+
 class GitHubAPIClient:
-    """Handles all interaction with the GitHub REST API for fetching contribution data."""
+    """Handles all interaction with the GitHub REST and GraphQL APIs for fetching contribution data."""
 
     def __init__(self, github_username: str, token: str):
         self.GITHUB_TOKEN = token
@@ -14,7 +16,7 @@ class GitHubAPIClient:
         # Standard headers for authentication and content negotiation
         self.headers = {
             "Authorization": f"token {self.GITHUB_TOKEN}",
-            "Accept": "application/vnd.github.v3+json"
+            "Accept": "application/vnd.github.v3+json",
         }
         self.target_username = github_username
 
@@ -26,7 +28,7 @@ class GitHubAPIClient:
     def fetch_contribution_data(self):
         """
         Fetches all unique activity dates across the user's public repositories
-        by querying paginated GitHub API events.
+        by preferring GraphQL contributions calendar and falling back to events/repos.
 
         Returns:
             list[str]: A list of unique date strings ('YYYY-MM-DD'). Returns empty list on failure.
@@ -43,8 +45,6 @@ class GitHubAPIClient:
 
         all_dates = set()
         # We start with PushEvent as it covers most commits, but we must handle general events for completeness.
-        # GitHub events endpoint doesn't support filtering by type in the query string;
-        # request the events and filter client-side for `PushEvent` entries.
         url = f"https://api.github.com/users/{self.target_username}/events?per_page=100&since={self._get_date_for_since_query()}"
         headers = self.headers
 
@@ -60,7 +60,7 @@ class GitHubAPIClient:
                     if response.status_code == 403 and 'rate limit exceeded' in str(response.text):
                         print("Rate limit exceeded! Please wait or use a GitHub App token with higher limits.")
                     elif response.status_code == 401:
-                         print("Authentication Failed (401). Check if GH_TOKEN is correct and has required permissions.")
+                        print("Authentication Failed (401). Check if GH_TOKEN is correct and has required permissions.")
                     return [] # Stop execution on API failure
 
                 data = response.json()
@@ -95,9 +95,8 @@ class GitHubAPIClient:
 
                 # Handle pagination: Check for the 'next' link in headers
                 link_header = response.headers.get('link')
-                if link_header and 'rel="next"' in link_header or (link_header and 'rel=next' in link_header):
+                if link_header and ('rel="next"' in link_header or 'rel=next' in link_header):
                     try:
-                        import re
                         # Extract the URL from the Link header e.g.
                         # <https://api.github.com/...>; rel="next", <...>; rel="last"
                         next_match = re.findall(r"<([^>]+)>;\s*rel\s*=\s*['\"]next['\"]", link_header)
@@ -117,78 +116,103 @@ class GitHubAPIClient:
         print(f"✅ Successfully fetched data covering {len(all_dates_list)} unique days.")
         return all_dates_list
 
-        def fetch_contribution_data_graphql(self, years: int = 3) -> list[str]:
-                """
-                Use the GitHub GraphQL API to fetch the contributions calendar for the
-                specified user. This provides a consolidated cross-repo contribution
-                history and is generally the most complete source for daily activity.
+    def fetch_contribution_data_graphql(self, years: int | None = None) -> list[str]:
+        """
+        Use the GitHub GraphQL API to fetch the contributions calendar for the
+        specified user. This provides a consolidated cross-repo contribution
+        history and is generally the most complete source for daily activity.
 
-                Args:
-                        years: number of years in the past to include (best-effort).
+        Args:
+            years: number of years in the past to include (best-effort). If None,
+                   the function will request year-by-year from 2008 to present.
 
-                Returns:
-                        list[str]: list of unique 'YYYY-MM-DD' date strings with >0 contributions.
-                """
-                # GraphQL endpoint
-                url = "https://api.github.com/graphql"
-                headers = {
-                        "Authorization": f"Bearer {self.GITHUB_TOKEN}",
-                        "Accept": "application/vnd.github.v4+json",
+        Returns:
+            list[str]: list of unique 'YYYY-MM-DD' date strings with >0 contributions.
+        """
+        # GraphQL endpoint
+        url = "https://api.github.com/graphql"
+        headers = {
+            "Authorization": f"Bearer {self.GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v4+json",
+        }
+
+        now = datetime.utcnow()
+        windows = []
+
+        if years is None:
+            start_year = 2008
+            end_year = now.year
+            for y in range(start_year, end_year + 1):
+                s = datetime(y, 1, 1)
+                e = datetime(y, 12, 31, 23, 59, 59)
+                if e > now:
+                    e = now
+                windows.append((s, e))
+        else:
+            # Single continuous window for recent years
+            from_dt = now - timedelta(days=365 * years)
+            windows.append((from_dt, now))
+
+        query = """
+        query($login: String!, $from: DateTime!, $to: DateTime!) {
+          user(login: $login) {
+            contributionsCollection(from: $from, to: $to) {
+              contributionCalendar {
+                weeks {
+                  contributionDays {
+                    date
+                    contributionCount
+                  }
                 }
+              }
+            }
+          }
+        }
+        """
 
-                to_dt = datetime.utcnow()
-                from_dt = to_dt - timedelta(days=365 * years)
-                # GraphQL expects ISO-8601 strings
-                variables = {
-                        "login": self.target_username,
-                        "from": from_dt.strftime("%Y-%m-%dT00:00:00Z"),
-                        "to": to_dt.strftime("%Y-%m-%dT23:59:59Z"),
-                }
+        all_dates = set()
+        for (s_dt, e_dt) in windows:
+            variables = {
+                "login": self.target_username,
+                "from": s_dt.strftime("%Y-%m-%dT00:00:00Z"),
+                "to": e_dt.strftime("%Y-%m-%dT23:59:59Z"),
+            }
 
-                query = """
-                query($login: String!, $from: DateTime!, $to: DateTime!) {
-                    user(login: $login) {
-                        contributionsCollection(from: $from, to: $to) {
-                            contributionCalendar {
-                                weeks {
-                                    contributionDays {
-                                        date
-                                        contributionCount
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                """
+            try:
+                resp = requests.post(url, headers=headers, json={"query": query, "variables": variables}, timeout=30)
+                if resp.status_code != 200:
+                    # If auth/rate limit issues arise, abort and fall back
+                    print(f"Warning: GraphQL query failed (status {resp.status_code}).")
+                    return []
 
-                try:
-                        resp = requests.post(url, headers=headers, json={"query": query, "variables": variables}, timeout=30)
-                        if resp.status_code != 200:
-                                print(f"Warning: GraphQL query failed (status {resp.status_code}). Falling back to REST methods.")
-                                return []
+                payload = resp.json()
+                if payload.get('errors'):
+                    # On errors (e.g., user not found), bail out early for that window
+                    continue
 
-                        payload = resp.json()
-                        weeks = payload.get('data', {}).get('user', {}).get('contributionsCollection', {})
-                        if not weeks:
-                                return []
+                coll = payload.get('data', {}).get('user', {}).get('contributionsCollection')
+                if not coll:
+                    continue
 
-                        cal = weeks.get('contributionCalendar', {})
-                        w = cal.get('weeks', [])
-                        dates = set()
-                        for week in w:
-                                for day in week.get('contributionDays', []) or []:
-                                        try:
-                                                cnt = day.get('contributionCount', 0)
-                                                if cnt and day.get('date'):
-                                                        dates.add(day.get('date'))
-                                        except Exception:
-                                                continue
+                cal = coll.get('contributionCalendar', {})
+                weeks = cal.get('weeks', []) or []
+                for week in weeks:
+                    for day in week.get('contributionDays', []) or []:
+                        try:
+                            if day.get('contributionCount', 0) and day.get('date'):
+                                all_dates.add(day.get('date'))
+                        except Exception:
+                            continue
 
-                        return list(dates)
-                except requests.exceptions.RequestException as e:
-                        print(f"Warning: GraphQL request error: {e}")
-                        return []
+            except requests.exceptions.RequestException as e:
+                print(f"Warning: GraphQL request error for window {s_dt} - {e}")
+                continue
+
+        # If we found nothing and we had attempted full-history, retry with 1 year window
+        if not all_dates and years is None:
+            return self.fetch_contribution_data_graphql(years=1)
+
+        return list(all_dates)
 
     def fetch_contributions_from_repos(self):
         """
@@ -244,7 +268,6 @@ class GitHubAPIClient:
                             # pagination for commits
                             link = cr.headers.get('link')
                             if link and 'rel="next"' in link:
-                                import re
                                 nm = re.findall(r"<([^>]+)>;\s*rel\s*=\s*['\"]next['\"]", link)
                                 next_commits = nm[0] if nm else None
                             else:
@@ -255,7 +278,6 @@ class GitHubAPIClient:
                 # pagination for repos
                 link = r.headers.get('link')
                 if link and 'rel="next"' in link:
-                    import re
                     nm = re.findall(r"<([^>]+)>;\s*rel\s*=\s*['\"]next['\"]", link)
                     repos_url = nm[0] if nm else None
                 else:
