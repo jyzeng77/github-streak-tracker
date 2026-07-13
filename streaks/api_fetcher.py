@@ -31,6 +31,16 @@ class GitHubAPIClient:
         Returns:
             list[str]: A list of unique date strings ('YYYY-MM-DD'). Returns empty list on failure.
         """
+        # Prefer GraphQL collection which returns a consolidated contributions
+        # calendar across repositories. Fall back to REST-based methods if it
+        # fails or returns no data.
+        try:
+            gql_dates = self.fetch_contribution_data_graphql()
+            if gql_dates:
+                return list(sorted(set(gql_dates)))
+        except Exception:
+            pass
+
         all_dates = set()
         # We start with PushEvent as it covers most commits, but we must handle general events for completeness.
         # GitHub events endpoint doesn't support filtering by type in the query string;
@@ -106,6 +116,79 @@ class GitHubAPIClient:
         all_dates_list = list(all_dates)
         print(f"✅ Successfully fetched data covering {len(all_dates_list)} unique days.")
         return all_dates_list
+
+        def fetch_contribution_data_graphql(self, years: int = 3) -> list[str]:
+                """
+                Use the GitHub GraphQL API to fetch the contributions calendar for the
+                specified user. This provides a consolidated cross-repo contribution
+                history and is generally the most complete source for daily activity.
+
+                Args:
+                        years: number of years in the past to include (best-effort).
+
+                Returns:
+                        list[str]: list of unique 'YYYY-MM-DD' date strings with >0 contributions.
+                """
+                # GraphQL endpoint
+                url = "https://api.github.com/graphql"
+                headers = {
+                        "Authorization": f"Bearer {self.GITHUB_TOKEN}",
+                        "Accept": "application/vnd.github.v4+json",
+                }
+
+                to_dt = datetime.utcnow()
+                from_dt = to_dt - timedelta(days=365 * years)
+                # GraphQL expects ISO-8601 strings
+                variables = {
+                        "login": self.target_username,
+                        "from": from_dt.strftime("%Y-%m-%dT00:00:00Z"),
+                        "to": to_dt.strftime("%Y-%m-%dT23:59:59Z"),
+                }
+
+                query = """
+                query($login: String!, $from: DateTime!, $to: DateTime!) {
+                    user(login: $login) {
+                        contributionsCollection(from: $from, to: $to) {
+                            contributionCalendar {
+                                weeks {
+                                    contributionDays {
+                                        date
+                                        contributionCount
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                """
+
+                try:
+                        resp = requests.post(url, headers=headers, json={"query": query, "variables": variables}, timeout=30)
+                        if resp.status_code != 200:
+                                print(f"Warning: GraphQL query failed (status {resp.status_code}). Falling back to REST methods.")
+                                return []
+
+                        payload = resp.json()
+                        weeks = payload.get('data', {}).get('user', {}).get('contributionsCollection', {})
+                        if not weeks:
+                                return []
+
+                        cal = weeks.get('contributionCalendar', {})
+                        w = cal.get('weeks', [])
+                        dates = set()
+                        for week in w:
+                                for day in week.get('contributionDays', []) or []:
+                                        try:
+                                                cnt = day.get('contributionCount', 0)
+                                                if cnt and day.get('date'):
+                                                        dates.add(day.get('date'))
+                                        except Exception:
+                                                continue
+
+                        return list(dates)
+                except requests.exceptions.RequestException as e:
+                        print(f"Warning: GraphQL request error: {e}")
+                        return []
 
     def fetch_contributions_from_repos(self):
         """
