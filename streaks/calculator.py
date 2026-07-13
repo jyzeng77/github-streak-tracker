@@ -50,25 +50,23 @@ def calculate_streak(contribution_dates: list[str]) -> tuple[int, str | None]:
             current_attempt_streak = 1
             last_date = current_date
         else:
-            previous_date = date_set[i-1]
-
-            # CORE CHECK: Is the difference exactly one day? (The core continuity check)
-            if (last_date - previous_date).days == 1:
+            # CORE CHECK: Is the difference between the last seen date and the current date exactly one day?
+            # We keep `last_date` as the previous iteration's date object (more recent), so compare it to current_date.
+            if (last_date - current_date).days == 1:
                 current_attempt_streak += 1
             else:
-                # Streak broken.
-                # 1. Save the finished streak count.
+                # Streak broken: record the streak and reset
                 max_streak = max(max_streak, current_attempt_streak)
-                # 2. Reset for the new potential streak starting today (count = 1).
                 current_attempt_streak = 1
 
-            last_date = previous_date # Set up last_date for the next iteration's comparison
+            # Update last_date to the current date for the next loop
+            last_date = current_date
 
         # Update max_streak regardless of whether we found a break, to capture the final running streak.
         max_streak = max(max_streak, current_attempt_streak)
 
 
-    # The peak date is simply the most recent date encountered after sorting (the first element).
-    peak_date = datetime.strptime(sorted_dates_str[0], '%Y-%m-%d').date() if sorted_dates_str else None
+    # The peak date is the most recent date encountered after sorting (the first element).
+    peak_date = date_set[0] if date_set else None
 
-    return max_streak, str(peak_date) # Return peak_date as string for consistency with API output structure
+    return max_streak, (peak_date.isoformat() if peak_date else None)
