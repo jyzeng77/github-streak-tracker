@@ -19,19 +19,21 @@ def run_streak_tracker(engine: StreakEngine, scope: str):
         print("🚨 Warning: Unknown scope selected.")
         return
 
-    streak, peak_date = engine.calculate_current_streak(scope)
+    current_streak, peak_date, max_streak = engine.calculate_current_streak(scope)
 
-    if streak is None or streak <= 0:
+    if current_streak is None or current_streak <= 0:
         print("\n💔 No verifiable streak found at this time. Check your token/scope settings or ensure you have made recent commits.")
     else:
         print("=====================================================")
         print("🏆 STREAK REPORT 💎")
         print("=====================================================")
-        print(f"🔥 Current Consecutive Streak: {streak} days!")
+        print(f"🔥 Current Consecutive Streak: {current_streak} days!")
         if peak_date:
             print(f"📅 Last recorded activity streak up to: {peak_date}")
         else:
-             print("⚠️ Warning: Could not determine a clear end date.")
+            print("⚠️ Warning: Could not determine a clear end date.")
+        # Historical best
+        print(f"📈 Historical Longest Streak: {max_streak} days")
         print("\nKeep coding! You're building momentum!")
 
 def main_tui():

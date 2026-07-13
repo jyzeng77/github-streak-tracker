@@ -22,7 +22,7 @@ class StreakEngine:
         # Initialize the client which contains authentication and fetching logic
         self.api_client = GitHubAPIClient(github_username=github_username, token=token)
 
-    def calculate_current_streak(self, scope: str = "all_repos") -> Tuple[int, Optional[str]]:
+    def calculate_current_streak(self, scope: str = "all_repos") -> Tuple[int, Optional[str], int]:
         """
         Executes the full workflow: Fetch Data -> Calculate Streak.
 
@@ -34,13 +34,22 @@ class StreakEngine:
             A tuple containing (streak_count: int, peak_date: str | None).
         """
         # Currently, the API client is hardcoded/optimized for fetching all user events.
+        # Attempt best-effort: first fetch events, then supplement with repo-level commits
         raw_dates = self.api_client.fetch_contribution_data()
+        # If we want older history, attempt repo-based collection and merge results
+        try:
+            repo_dates = self.api_client.fetch_contributions_from_repos()
+            if repo_dates:
+                # merge
+                raw_dates = list(set(raw_dates) | set(repo_dates))
+        except Exception:
+            pass
 
         if not raw_dates:
             return 0, None # API failed or no data found
 
         # --- Calculation ---
         print(f"\n[Core Engine]: Running streak calculation based on {len(raw_dates)} unique contributing days.")
-        streak, peak_date = calculate_streak(raw_dates)
+        current_streak, peak_date, max_streak = calculate_streak(raw_dates)
 
-        return streak, peak_date
+        return current_streak, peak_date, max_streak
