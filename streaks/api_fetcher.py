@@ -13,17 +13,11 @@ class GitHubAPIClient:
         if not self.GITHUB_TOKEN:
             raise ValueError("GH_TOKEN must be provided to initialize GitHubAPIClient.")
 
-        # Standard headers for authentication and content negotiation
         self.headers = {
             "Authorization": f"token {self.GITHUB_TOKEN}",
             "Accept": "application/vnd.github.v3+json",
         }
         self.target_username = github_username
-
-    def _get_date_for_since_query(self) -> str:
-        """Helper to calculate the date N-days ago for API 'since' parameter."""
-        # Looking back 1 year is a reasonable default window for contribution tracking.
-        return (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
 
     def fetch_contribution_data(self):
         """

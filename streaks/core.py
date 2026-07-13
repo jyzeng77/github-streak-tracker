@@ -1,9 +1,7 @@
 # streaks/core.py
 
-import os
 from typing import Optional, Tuple
 
-# Import the modular components
 from .api_fetcher import GitHubAPIClient
 from .calculator import calculate_streak
 
@@ -31,7 +29,7 @@ class StreakEngine:
                           The current implementation defaults to and supports only 'all_repos'.
 
         Returns:
-            A tuple containing (streak_count: int, peak_date: str | None).
+            A tuple containing (streak_count: int, peak_date: str | None, max_streak: int).
         """
         # Use GraphQL as the authoritative source for the user's contribution history.
         raw_dates = self.api_client.fetch_contribution_data()

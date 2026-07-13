@@ -1,7 +1,6 @@
 # tui.py
 
 import os
-import sys
 from streaks.core import StreakEngine
 
 def run_streak_tracker(engine: StreakEngine, scope: str):

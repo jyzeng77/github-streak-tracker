@@ -1,26 +1,25 @@
 # streaks/calculator.py
 
 from datetime import datetime, timedelta
-from typing import List, Tuple
-from collections import defaultdict
+from typing import Optional, Tuple
 
 
 def calculate_streak(contribution_dates: list[str]) -> tuple[int, str | None, int]:
     """
-    Calculates the longest consecutive streak from a set of date strings ('YYYY-MM-DD').
-
-    This function is a pure calculation utility, requiring only cleaned date data as input.
-    It handles the logic for finding gaps and determining the peak day.
+    Calculates both the current consecutive streak and the historical longest streak
+    from a set of date strings ('YYYY-MM-DD').
 
     Args:
-        contribution_dates: A list of unique date strings found in various API calls.
+        contribution_dates: A list of unique date strings found in GitHub contributions.
 
     Returns:
-        A tuple containing (max_streak: int, peak_date: str | None): The longest streak count
-        and the date the streak was measured up to. Returns (0, None) if no data is provided.
+        A tuple containing:
+        - current_streak (int): consecutive streak ending on the most recent date.
+        - peak_date (str | None): most recent contribution date.
+        - max_streak (int): historical longest consecutive streak.
     """
     if not contribution_dates:
-        return 0, None
+        return 0, None, 0
 
     # Phase 1: Preparation - Convert strings to date objects for reliable arithmetic
     try:
@@ -31,7 +30,7 @@ def calculate_streak(contribution_dates: list[str]) -> tuple[int, str | None, in
             date_objects.append(date_obj)
     except ValueError as e:
         print(f"CRITICAL ERROR: Date parsing failed during calculation phase. Check input data format. Error: {e}")
-        return 0, None
+        return 0, None, 0
 
     # Ensure uniqueness and sort the date objects in descending order (most recent first)
     date_set = sorted(list(set(date_objects)), reverse=True)
