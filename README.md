@@ -3,6 +3,15 @@
 
 This application tracks your GitHub contribution streak using GitHub GraphQL as the authoritative source. It reports both your current consecutive streak and your historical longest streak.
 
+## Preamble - About the Project
+**This section is the only human-written thing in this whole repo, along about half of the commit messages.** 
+
+This project is my first time using agentic coding tools to fully create an idea that I had, aka vibe coding. I downloaded Gemma 4 on Ollama and wanted to try to use that to generate code, first with Pi agent (which led to lacklustre results), before running Gemma 4 inside Claude Code. 
+
+The results were so much better and as of today (July 12, 2026), I suggest using the non-MLX version of Gemma 4 e4b as its performance is significantly better. I ended up giving up using Claude Code with Gemma 4 and finished the project using Copilot in VSCode. 
+
+This was a really fun experience and I would love to try this again with another project or remake this project by hand (maybe sans the API stuff because GitHub API docs are so dense).
+
 ## 🚀 Usage Instructions
 
 ### A. Production Mode (Recommended TUI Use)
