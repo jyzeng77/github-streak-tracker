@@ -1,5 +1,8 @@
 import os
 from dotenv import load_dotenv
+
+# Load environment variables from .env if present so downstream modules can access them
+load_dotenv()
 # Import the main execution interface from our newly created package structure
 try:
     from streaks.core import StreakEngine

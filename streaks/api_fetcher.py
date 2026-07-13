@@ -33,7 +33,9 @@ class GitHubAPIClient:
         """
         all_dates = set()
         # We start with PushEvent as it covers most commits, but we must handle general events for completeness.
-        url = f"https://api.github.com/users/{self.target_username}/events?type=PushEvent&per_page=100&since={self._get_date_for_since_query()}"
+        # GitHub events endpoint doesn't support filtering by type in the query string;
+        # request the events and filter client-side for `PushEvent` entries.
+        url = f"https://api.github.com/users/{self.target_username}/events?per_page=100&since={self._get_date_for_since_query()}"
         headers = self.headers
 
         print(f"Starting paginated fetch of activity data from GitHub API for {self.target_username}...")
@@ -52,13 +54,24 @@ class GitHubAPIClient:
                     return [] # Stop execution on API failure
 
                 data = response.json()
-                events = data.get('events', [])
+                # The API returns a list of events for this endpoint. Be defensive
+                # in case another shape is returned by a proxy or wrapper.
+                if isinstance(data, list):
+                    events = data
+                elif isinstance(data, dict):
+                    # some APIs/layers may wrap results under 'events' or 'items'
+                    events = data.get('events') or data.get('items') or []
+                else:
+                    events = []
 
                 if not events:
                     break
 
                 # Process fetched events/commits
                 for event in events:
+                    # Only consider PushEvent (commits/pushes)
+                    if event.get('type') != 'PushEvent':
+                        continue
                     created_at = event.get('created_at')
                     if created_at:
                         try:
@@ -71,15 +84,16 @@ class GitHubAPIClient:
 
                 # Handle pagination: Check for the 'next' link in headers
                 link_header = response.headers.get('link')
-                if link_header and 'rel="next"' in link_header:
+                if link_header and 'rel="next"' in link_header or (link_header and 'rel=next' in link_header):
                     try:
                         import re
-                        # Extracting URL from <url>; rel="next" structure
-                        next_match = re.findall(r'<([^>]+)>;\s*rel\s*=\s*["']next["']', link_header)
-                        url = next_match[0]
+                        # Extract the URL from the Link header e.g.
+                        # <https://api.github.com/...>; rel="next", <...>; rel="last"
+                        next_match = re.findall(r"<([^>]+)>;\s*rel\s*=\s*['\"]next['\"]", link_header)
+                        url = next_match[0] if next_match else None
                     except Exception:
-                         print("Warning: Could not parse 'next' URL from Link header.")
-                         url = None
+                        print("Warning: Could not parse 'next' URL from Link header.")
+                        url = None
                 else:
                     # No next page found
                     url = None
