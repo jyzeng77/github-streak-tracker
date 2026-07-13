@@ -28,93 +28,21 @@ class GitHubAPIClient:
     def fetch_contribution_data(self):
         """
         Fetches all unique activity dates across the user's public repositories
-        by preferring GraphQL contributions calendar and falling back to events/repos.
+        using the authoritative GitHub GraphQL contributions calendar.
+
+        For optional diagnostics, REST and repo-based collection methods remain
+        available separately via `fetch_contribution_data_graphql()` and
+        `fetch_contributions_from_repos()`.
 
         Returns:
             list[str]: A list of unique date strings ('YYYY-MM-DD'). Returns empty list on failure.
         """
-        # Prefer GraphQL collection which returns a consolidated contributions
-        # calendar across repositories. Fall back to REST-based methods if it
-        # fails or returns no data.
         try:
             gql_dates = self.fetch_contribution_data_graphql()
-            if gql_dates:
-                return list(sorted(set(gql_dates)))
+            return list(sorted(set(gql_dates)))
         except Exception:
-            pass
-
-        all_dates = set()
-        # We start with PushEvent as it covers most commits, but we must handle general events for completeness.
-        url = f"https://api.github.com/users/{self.target_username}/events?per_page=100&since={self._get_date_for_since_query()}"
-        headers = self.headers
-
-        print(f"Starting paginated fetch of activity data from GitHub API for {self.target_username}...")
-
-        while url:
-            try:
-                response = requests.get(url, headers=headers)
-
-                # Check for rate limiting/errors first
-                if response.status_code != 200:
-                    print(f"\n[!] API Request Failed. Status Code: {response.status_code}")
-                    if response.status_code == 403 and 'rate limit exceeded' in str(response.text):
-                        print("Rate limit exceeded! Please wait or use a GitHub App token with higher limits.")
-                    elif response.status_code == 401:
-                        print("Authentication Failed (401). Check if GH_TOKEN is correct and has required permissions.")
-                    return [] # Stop execution on API failure
-
-                data = response.json()
-                # The API returns a list of events for this endpoint. Be defensive
-                # in case another shape is returned by a proxy or wrapper.
-                if isinstance(data, list):
-                    events = data
-                elif isinstance(data, dict):
-                    # some APIs/layers may wrap results under 'events' or 'items'
-                    events = data.get('events') or data.get('items') or []
-                else:
-                    events = []
-
-                if not events:
-                    break
-
-                # Process fetched events/commits
-                for event in events:
-                    # Only consider PushEvent (commits/pushes)
-                    if isinstance(event, dict) and event.get('type') != 'PushEvent':
-                        continue
-                    # Events returned by the events API are dicts with 'created_at'
-                    created_at = event.get('created_at') if isinstance(event, dict) else None
-                    if created_at:
-                        try:
-                            # Standardize date format by stripping Z and appending UTC offset (+00:00)
-                            date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                            formatted_date = date_obj.strftime('%Y-%m-%d')
-                            all_dates.add(formatted_date)
-                        except ValueError as e:
-                            print(f"Warning: Could not parse date '{created_at}'. Error: {e}")
-
-                # Handle pagination: Check for the 'next' link in headers
-                link_header = response.headers.get('link')
-                if link_header and ('rel="next"' in link_header or 'rel=next' in link_header):
-                    try:
-                        # Extract the URL from the Link header e.g.
-                        # <https://api.github.com/...>; rel="next", <...>; rel="last"
-                        next_match = re.findall(r"<([^>]+)>;\s*rel\s*=\s*['\"]next['\"]", link_header)
-                        url = next_match[0] if next_match else None
-                    except Exception:
-                        print("Warning: Could not parse 'next' URL from Link header.")
-                        url = None
-                else:
-                    # No next page found
-                    url = None
-
-            except requests.exceptions.RequestException as e:
-                print(f"\n[!] Network or Request Error during fetch: {e}")
-                return []
-
-        all_dates_list = list(all_dates)
-        print(f"✅ Successfully fetched data covering {len(all_dates_list)} unique days.")
-        return all_dates_list
+            print("Warning: GraphQL fetch failed. No contribution data available.")
+            return []
 
     def fetch_contribution_data_graphql(self, years: int | None = None) -> list[str]:
         """
