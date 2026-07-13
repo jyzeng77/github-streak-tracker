@@ -55,7 +55,7 @@ The codebase is modular and organized under `streaks/`:
 Optional diagnostics support is kept in `api_fetcher.py` via `fetch_contributions_from_repos()`, but it is not used in the default streak calculation path.
 
 ## Setup & Installation
-1. Clone the project: `git clone <repo-url>`
+1. Clone the project: `git clone https://github.com/jyzeng77/github-streak-tracker`
 2. Activate the virtualenv or use the provided `.venv`.
 3. Install dependencies:
 ```bash
